@@ -145,6 +145,7 @@ type InternalMove = {
   captured?: PieceSymbol
   promotion?: PieceSymbol
   flags: number
+  clock?: number
 }
 
 interface History {
@@ -178,12 +179,14 @@ export class Move {
   lan: string
   before: string
   after: string
+  clock?: number
 
   constructor(
     internal: InternalMove,
     san: string,
     before: string,
     after: string,
+    clock?: number,
   ) {
     const { color, piece, from, to, flags, captured, promotion } = internal
 
@@ -216,6 +219,7 @@ export class Move {
       this.promotion = promotion
       this.lan += promotion
     }
+    if (clock) this.clock = clock
   }
 
   isCapture() {
@@ -752,6 +756,7 @@ export class Chess {
   private _moveNumber = 0
   private _history: History[] = []
   private _comments: Record<string, string> = {}
+  private _clocks: Record<string, number> = {}
   private _suffixes: Record<string, Suffix> = {}
   private _nags: Record<string, NAG[]> = {}
   private _castling: Record<Color, number> = { w: 0, b: 0 }
@@ -1446,11 +1451,14 @@ export class Chess {
 
     this._makeMove(internal)
     const after = this.fen()
+
     this._undoMove()
 
-    return new Move(internal, san, before, after)
+    return new Move(internal, san, before, after, this._clocks[after])
   }
-
+  getClocks() {
+    return this._clocks
+  }
   moves(): string[]
   moves({ square }: { square: Square }): string[]
   moves({ piece }: { piece: PieceSymbol }): string[]
@@ -2271,6 +2279,30 @@ export class Chess {
 
     let node = parsedPgn.root
 
+    function parseClock(comment: string) {
+      // match [%clk 0:09:50.7] -> we'll return 590,700 (ms)
+      const clockRegex = /(\[%clk\s*([\d:.]+)])/
+      const results = clockRegex.exec(comment)
+      if (!results) {
+        return undefined
+      }
+
+      const clockString = results[2]
+      const clockParts = clockString.split(':')
+      let ms = 0
+      if (clockParts.length === 3) {
+        ms += Number(clockParts[0]) * 60 * 60 * 1000
+        ms += Number(clockParts[1]) * 60 * 1000
+        ms += Number(clockParts[2]) * 1000
+      } else if (clockParts.length === 2) {
+        ms += Number(clockParts[0]) * 60 * 1000
+        ms += Number(clockParts[1]) * 1000
+      } else if (clockParts.length === 1) {
+        ms += Number(clockParts[0]) * 1000
+      }
+      return ms
+    }
+
     while (node) {
       if (node.move) {
         const suffixAnnotation = node.suffixAnnotation
@@ -2292,9 +2324,15 @@ export class Chess {
           }
         }
       }
-
+      let clock: number | undefined = undefined
       if (node.comment !== undefined) {
         this._comments[this.fen()] = node.comment
+        if (node.comment.includes('[%clk')) {
+          clock = parseClock(node.comment)
+          if (clock !== undefined) {
+            this._clocks[this.fen()] = clock
+          }
+        }
       }
 
       node = node.variations[0]
